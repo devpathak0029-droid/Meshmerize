@@ -99,6 +99,21 @@ Verify the turn-reduction engine locally using Python:
 ```bash
 python test/maze_sim.py
 ```
+
+Run the end-to-end command-line telemetry simulation:
+```bash
+python test/demo_cli.py
+```
+
+### 6. Interactive 2D Virtual Arena Simulator
+The repository includes a browser-based real-time 2D visual simulator (`simulator.html`) that simulates:
+- The full 230 cm x 230 cm Techfest 2026-27 arena.
+- 8-channel IR sensor bar raycasting and noise.
+- PID line following and closed-loop junction turns.
+- Real-time path recording and LSRB turn reduction.
+- Checkpoints, live telemetry, and official scoring calculation.
+
+To run: Open `simulator.html` in any web browser (Chrome, Edge, Firefox).
 Expected output:
 ```
 --------------------------------------------------

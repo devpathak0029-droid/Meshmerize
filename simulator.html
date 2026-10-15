@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Meshmerize 2026-27 Robot Virtual Simulator</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--background, #0f172a);
+      color: var(--foreground, #f8fafc);
+    }
+    .panel {
+      background: var(--card, #1e293b);
+      border: 1px solid var(--border, #334155);
+      border-radius: 12px;
+    }
+    canvas {
+      image-rendering: pixelated;
+    }
+  </style>
+</head>
+<body class="antialiased">
+  <div class="max-w-6xl mx-auto space-y-4">
+    <!-- Header -->
+    <div class="panel p-4 flex flex-wrap items-center justify-between gap-4 shadow-md">
+      <div>
+        <h1 class="text-xl font-bold text-[var(--foreground)] flex items-center gap-2">
+          <span>🤖 Meshmerize 2026-27 Autonomous Simulator</span>
+          <span id="endLed" class="inline-block w-3.5 h-3.5 rounded-full bg-red-950 border border-red-500 shadow-none transition-all duration-200" title="End Zone Mandatory Red LED"></span>
+        </h1>
+        <p class="text-xs text-[var(--muted-foreground)]">
+          Arena: 230 cm × 230 cm | 30 mm white lines | 8-Channel IR Array PID + LSRB Path Simplification
+        </p>
+      </div>
+
+      <!-- Controls -->
+      <div class="flex items-center gap-2 flex-wrap">
+        <button id="btnDryRun" class="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs transition shadow flex items-center gap-1.5">
+          <span>▶ Start Dry Run</span>
+        </button>
+        <button id="btnActualRun" class="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs transition shadow flex items-center gap-1.5 opacity-60 cursor-not-allowed" disabled>
+          <span>⚡ Start Actual Run</span>
+        </button>
+        <button id="btnReset" class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-medium transition">
+          ↺ Reset
+        </button>
+        <div class="flex items-center gap-1.5 text-xs text-slate-300 ml-2">
+          <span>Speed:</span>
+          <input id="speedRange" type="range" min="1" max="5" value="2" class="w-20 cursor-pointer accent-blue-500">
+          <span id="speedVal" class="font-mono text-blue-400">2x</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main View: Arena Canvas + Live Telemetry -->
+    <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+      <!-- Arena Simulation Canvas -->
+      <div class="panel p-3 lg:col-span-3 flex flex-col items-center justify-center relative overflow-hidden bg-slate-950">
+        <canvas id="arenaCanvas" width="600" height="600" class="rounded-lg shadow-inner border border-slate-800"></canvas>
+        <div class="absolute bottom-4 left-5 bg-slate-900/80 backdrop-blur px-3 py-1.5 rounded-md border border-slate-700 text-xs font-mono space-x-3">
+          <span>State: <strong id="stateLabel" class="text-blue-400">IDLE</strong></span>
+          <span>Time: <strong id="timerLabel" class="text-amber-400">0.0s</strong></span>
+          <span>Score: <strong id="scoreLabel" class="text-emerald-400">0 pts</strong></span>
+        </div>
+      </div>
+
+      <!-- Telemetry & Firmware Diagnostics Sidebar -->
+      <div class="panel p-4 flex flex-col space-y-4">
+        <div>
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)] mb-2">
+            8-Channel IR Reflectance Bar
+          </h3>
+          <div class="flex justify-between items-end gap-1 h-14 bg-slate-900 p-2 rounded-lg border border-slate-800" id="sensorBars">
+            <!-- 8 bars injected by JS -->
+          </div>
+          <div class="flex justify-between text-[10px] font-mono text-slate-400 mt-1 px-1">
+            <span>S0 (L)</span>
+            <span>S3-S4 (C)</span>
+            <span>S7 (R)</span>
+          </div>
+          <div class="mt-2 text-xs font-mono flex justify-between bg-slate-900/60 px-2 py-1 rounded border border-slate-800">
+            <span>Pos Offset: <span id="posVal" class="text-cyan-400">0</span></span>
+            <span>Correction: <span id="pidVal" class="text-amber-400">0.0</span></span>
+          </div>
+        </div>
+
+        <!-- Path Memory -->
+        <div class="flex-1 flex flex-col space-y-2">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+            Learned Path Memory
+          </h3>
+          <div class="bg-slate-900 p-2.5 rounded-lg border border-slate-800 font-mono text-xs space-y-2 flex-1">
+            <div>
+              <div class="text-[11px] text-slate-400">Raw Dry Run Path:</div>
+              <div id="rawPath" class="text-yellow-400 font-bold break-all min-h-[1.2rem]">-</div>
+            </div>
+            <div>
+              <div class="text-[11px] text-slate-400">Optimized Shortest Path:</div>
+              <div id="optPath" class="text-emerald-400 font-bold break-all min-h-[1.2rem]">-</div>
+            </div>
+            <div>
+              <div class="text-[11px] text-slate-400">Current Target Turn:</div>
+              <div id="nextTurnLabel" class="text-cyan-300 font-bold">-</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Checkpoints Tracker -->
+        <div class="bg-slate-900/60 p-2.5 rounded-lg border border-slate-800 text-xs">
+          <div class="flex justify-between text-[11px] mb-1">
+            <span class="text-slate-400">Checkpoints (25 pts each):</span>
+            <span id="cpCount" class="font-mono text-emerald-400 font-semibold">0 / 4</span>
+          </div>
+          <div class="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+            <div id="cpBar" class="bg-emerald-500 h-full w-0 transition-all duration-300"></div>
+          </div>
+        </div>
+
+        <!-- Action Log -->
+        <div>
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)] mb-1">
+            Firmware Event Log
+          </h3>
+          <div id="logBox" class="bg-slate-900 p-2 rounded-lg border border-slate-800 h-28 overflow-y-auto text-[11px] font-mono text-slate-300 space-y-0.5">
+            <div>[INIT] System booted. ESP32 ready.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // =========================================================================
+    // MESHMERIZE ROBOT & ARENA SIMULATOR ENGINE
+    // =========================================================================
+
+    const canvas = document.getElementById('arenaCanvas');
+    const ctx = canvas.getContext('2d');
+    const SCALE = 600 / 230; // 600px canvas represents 230 cm arena
+
+    // UI elements
+    const btnDryRun = document.getElementById('btnDryRun');
+    const btnActualRun = document.getElementById('btnActualRun');
+    const btnReset = document.getElementById('btnReset');
+    const stateLabel = document.getElementById('stateLabel');
+    const timerLabel = document.getElementById('timerLabel');
+    const scoreLabel = document.getElementById('scoreLabel');
+    const posVal = document.getElementById('posVal');
+    const pidVal = document.getElementById('pidVal');
+    const rawPathEl = document.getElementById('rawPath');
+    const optPathEl = document.getElementById('optPath');
+    const nextTurnLabel = document.getElementById('nextTurnLabel');
+    const cpCountEl = document.getElementById('cpCount');
+    const cpBarEl = document.getElementById('cpBar');
+    const endLed = document.getElementById('endLed');
+    const logBox = document.getElementById('logBox');
+    const sensorBarsContainer = document.getElementById('sensorBars');
+    const speedRange = document.getElementById('speedRange');
+    const speedVal = document.getElementById('speedVal');
+
+    // Create 8 sensor bars in UI
+    const sensorBars = [];
+    for (let i = 0; i < 8; i++) {
+      const b = document.createElement('div');
+      b.className = 'flex-1 bg-slate-700 rounded-t transition-all duration-75';
+      b.style.height = '10%';
+      sensorBarsContainer.appendChild(b);
+      sensorBars.push(b);
+    }
+
+    function logMsg(msg) {
+      const line = document.createElement('div');
+      line.textContent = `[${(simTime).toFixed(1)}s] ${msg}`;
+      logBox.appendChild(line);
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    // =========================================================================
+    // ARENA GEOMETRY DEFINITION (Official Techfest 2026-27 Layout)
+    // =========================================================================
+    // White lines (30mm = 3cm width in real world)
+    const LINES = [
+      // Start lead-in
+      { x1: 180, y1: 200, x2: 180, y2: 170 }, // Start vertical line
+      { x1: 180, y1: 200, x2: 210, y2: 200 }, // Start baseline
+      { x1: 180, y1: 170, x2: 153, y2: 170 },
+      { x1: 153, y1: 170, x2: 153, y2: 200 }, // Dead end 1
+      { x1: 180, y1: 170, x2: 180, y2: 110 },
+      
+      // Right branch & loop
+      { x1: 180, y1: 110, x2: 213, y2: 110 },
+      { x1: 213, y1: 110, x2: 213, y2: 50 },
+      { x1: 213, y1: 50,  x2: 180, y2: 50 },
+      { x1: 180, y1: 50,  x2: 180, y2: 110 },
+      { x1: 180, y1: 80,  x2: 150, y2: 80 },
+      { x1: 150, y1: 80,  x2: 150, y2: 120 }, // Dead end 2
+      
+      // Central network
+      { x1: 180, y1: 50,  x2: 123, y2: 50 },
+      { x1: 123, y1: 50,  x2: 123, y2: 93 },
+      { x1: 123, y1: 93,  x2: 90,  y2: 93 },
+      { x1: 90,  y1: 93,  x2: 90,  y2: 120 },
+      { x1: 90,  y1: 120, x2: 120, y2: 120 },
+      { x1: 120, y1: 120, x2: 120, y2: 150 }, // Dead end 3
+      
+      // Toward checkpoints & End Zone
+      { x1: 90,  y1: 93,  x2: 53,  y2: 93 },
+      { x1: 53,  y1: 93,  x2: 53,  y2: 53 },
+      { x1: 53,  y1: 53,  x2: 23,  y2: 53 },
+      { x1: 23,  y1: 53,  x2: 23,  y2: 180 },
+      { x1: 23,  y1: 180, x2: 70,  y2: 180 }, // Leads to End Zone
+    ];
+
+    // Checkpoints (25 pts each)
+    const CHECKPOINTS = [
+      { x: 180, y: 110, name: "CP1", hit: false },
+      { x: 123, y: 50,  name: "CP2", hit: false },
+      { x: 90,  y: 93,   name: "CP3", hit: false },
+      { x: 53,  y: 70,   name: "CP4", hit: false }
+    ];
+
+    // End Zone: 400 mm x 400 mm solid white box
+    const END_ZONE = { x: 70, y: 160, w: 40, h: 40 };
+
+    // =========================================================================
+    // ROBOT KINEMATICS & SENSORS
+    // =========================================================================
+    const START_POS = { x: 200, y: 200, angle: -Math.PI / 2 };
+
+    let bot = {
+      x: START_POS.x,
+      y: START_POS.y,
+      angle: START_POS.angle, // Heading in radians
+      speed: 0,
+      leftPwm: 0,
+      rightPwm: 0,
+      sensorVals: [0, 0, 0, 0, 0, 0, 0, 0],
+      linePos: 3500,
+      onLine: true,
+      isAllWhite: false,
+      isAllBlack: false,
+    };
+
+    // State machine
+    let state = 'IDLE'; // IDLE, DRY_RUN, DRY_RUN_DONE, ACTUAL_RUN, FINISHED
+    let simTime = 0.0;
+    let timeScale = 2;
+    let score = 0;
+    let checkpointsHit = 0;
+
+    // Maze Solver storage
+    let recordedPath = [];
+    let optimizedPath = [];
+    let replayIndex = 0;
+    let junctionCooldown = 0;
+
+    // PID constants
+    const KP = 0.045;
+    const KD = 0.35;
+    let lastError = 0;
+
+    // Canonical LSRB Reduction Rules
+    const REDUCTIONS = {
+      'LBL': 'S', 'LBS': 'R', 'LBR': 'B',
+      'RBL': 'B', 'SBL': 'R', 'SBS': 'B',
+      'RBR': 'S', 'SBR': 'L', 'RBS': 'L'
+    };
+
+    function simplify(pathArr) {
+      let p = [...pathArr];
+      let i = 0;
+      while (i <= p.length - 3) {
+        if (p[i+1] === 'B') {
+          const trip = p[i] + 'B' + p[i+2];
+          if (REDUCTIONS[trip]) {
+            p.splice(i, 3, REDUCTIONS[trip]);
+            i = Math.max(0, i - 2);
+            continue;
+          }
+        }
+        i++;
+      }
+      return p;
+    }
+
+    // =========================================================================
+    // SENSOR REFLECTANCE RAYCASTING
+    // =========================================================================
+    function distanceToSegment(px, py, x1, y1, x2, y2) {
+      const l2 = (x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1);
+      if (l2 === 0) return Math.hypot(px - x1, py - y1);
+      let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
+      t = Math.max(0, Math.min(1, t));
+      return Math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)));
+    }
+
+    function sampleSensors() {
+      // 8 sensors arranged perpendicularly across front bumper (width ~6 cm)
+      const SENSOR_SPAN = 7.0; // cm
+      const SENSOR_FWD = 5.0;  // cm ahead of axle
+      const LINE_WIDTH = 3.0;  // cm
+
+      const cosA = Math.cos(bot.angle);
+      const sinA = Math.sin(bot.angle);
+
+      // Center of sensor bar
+      const barCenterX = bot.x + cosA * SENSOR_FWD;
+      const barCenterY = bot.y + sinA * SENSOR_FWD;
+
+      let sum = 0;
+      let weightedSum = 0;
+      let whiteCount = 0;
+
+      for (let i = 0; i < 8; i++) {
+        // lateral offset from -3.5cm to +3.5cm
+        const offset = ((i - 3.5) / 3.5) * (SENSOR_SPAN / 2);
+        const sx = barCenterX - sinA * offset;
+        const sy = barCenterY + cosA * offset;
+
+        // Check if point inside End Zone box
+        let val = 0;
+        if (sx >= END_ZONE.x && sx <= END_ZONE.x + END_ZONE.w &&
+            sy >= END_ZONE.y && sy <= END_ZONE.y + END_ZONE.h) {
+          val = 980;
+        } else {
+          // Check proximity to any arena line
+          let minDist = 999;
+          for (const line of LINES) {
+            const d = distanceToSegment(sx, sy, line.x1, line.y1, line.x2, line.y2);
+            if (d < minDist) minDist = d;
+          }
+          if (minDist <= LINE_WIDTH / 2) {
+            val = Math.round(950 * (1 - minDist / (LINE_WIDTH / 2)));
+          } else {
+            val = 30 + Math.random() * 15; // baseline noise
+          }
+        }
+
+        bot.sensorVals[i] = val;
+        if (val > 450) whiteCount++;
+        if (val > 80) {
+          sum += val;
+          weightedSum += val * (i * 1000);
+        }
+      }
+
+      bot.isAllWhite = (whiteCount >= 7);
+      bot.isAllBlack = (whiteCount === 0);
+      bot.onLine = (sum > 0 && whiteCount > 0);
+
+      if (bot.onLine) {
+        bot.linePos = weightedSum / sum;
+      }
+    }
+
+    // =========================================================================
+    // AUTONOMOUS NAVIGATION CONTROL LOOP
+    // =========================================================================
+    function stepSimulation(dt) {
+      if (state !== 'DRY_RUN' && state !== 'ACTUAL_RUN') return;
+
+      simTime += dt;
+      timerLabel.textContent = simTime.toFixed(1) + 's';
+
+      sampleSensors();
+
+      // Checkpoint detection
+      for (const cp of CHECKPOINTS) {
+        if (!cp.hit && Math.hypot(bot.x - cp.x, bot.y - cp.y) < 8.0) {
+          cp.hit = true;
+          checkpointsHit++;
+          score += 25;
+          logMsg(`Checkpoint ${cp.name} reached! (+25 pts)`);
+          cpCountEl.textContent = `${checkpointsHit} / 4`;
+          cpBarEl.style.width = `${(checkpointsHit / 4) * 100}%`;
+          scoreLabel.textContent = score + ' pts';
+        }
+      }
+
+      if (junctionCooldown > 0) {
+        junctionCooldown -= dt;
+      }
+
+      // 1. END ZONE DETECTION (Mandatory Red LED)
+      if (bot.isAllWhite) {
+        bot.speed = 0;
+        endLed.classList.remove('bg-red-950', 'shadow-none');
+        endLed.classList.add('bg-red-500', 'shadow-[0_0_12px_#ef4444]');
+
+        if (state === 'DRY_RUN') {
+          score += 30; // Dry run completion
+          score += 5;  // LED bonus
+          score += Math.max(0, Math.round(180 - simTime)); // Time bonus
+          state = 'DRY_RUN_DONE';
+          stateLabel.textContent = 'DRY RUN COMPLETED';
+          stateLabel.className = 'text-emerald-400 font-bold';
+          logMsg(">>> END ZONE CONFIRMED! Red LED illuminated. (+35 pts) <<<");
+
+          recordedPath.push('E');
+          rawPathEl.textContent = recordedPath.join('');
+          optimizedPath = simplify(recordedPath);
+          optPathEl.textContent = optimizedPath.join('');
+          logMsg(`Path simplified: ${recordedPath.join('')} -> ${optimizedPath.join('')}`);
+
+          btnActualRun.disabled = false;
+          btnActualRun.classList.remove('opacity-60', 'cursor-not-allowed');
+          scoreLabel.textContent = score + ' pts';
+        } else if (state === 'ACTUAL_RUN') {
+          score += 30; // Shortest path bonus
+          score += Math.max(0, Math.round(150 - simTime));
+          state = 'FINISHED';
+          stateLabel.textContent = 'RACE FINISHED!';
+          stateLabel.className = 'text-purple-400 font-bold';
+          logMsg(">>> ACTUAL RUN COMPLETED AT SHORTEST PATH! <<<");
+          scoreLabel.textContent = score + ' pts';
+        }
+        return;
+      }
+
+      // 2. DEAD END CHECK
+      if (bot.isAllBlack && junctionCooldown <= 0) {
+        // U-turn
+        bot.angle += Math.PI;
+        junctionCooldown = 0.6;
+        if (state === 'DRY_RUN') {
+          recordedPath.push('B');
+          rawPathEl.textContent = recordedPath.join('');
+          logMsg("Dead end reached -> U-turn ('B')");
+        }
+        return;
+      }
+
+      // 3. JUNCTION DETECTION & DECISION
+      const leftDetect = bot.sensorVals[0] > 450 || bot.sensorVals[1] > 450;
+      const rightDetect = bot.sensorVals[6] > 450 || bot.sensorVals[7] > 450;
+      const centerDetect = bot.sensorVals[3] > 400 || bot.sensorVals[4] > 400;
+
+      if ((leftDetect || rightDetect) && junctionCooldown <= 0) {
+        junctionCooldown = 0.55; // Anti-thrashing clearance lock
+
+        let turn = 'S';
+        if (state === 'DRY_RUN') {
+          // Left-Hand Rule Priority: L -> S -> R
+          if (leftDetect) turn = 'L';
+          else if (centerDetect) turn = 'S';
+          else if (rightDetect) turn = 'R';
+
+          recordedPath.push(turn);
+          rawPathEl.textContent = recordedPath.join('');
+          logMsg(`Junction explored: chose '${turn}'`);
+        } else if (state === 'ACTUAL_RUN') {
+          // Replay planned shortest path
+          if (replayIndex < optimizedPath.length) {
+            turn = optimizedPath[replayIndex++];
+            nextTurnLabel.textContent = `${turn} (Step ${replayIndex}/${optimizedPath.length})`;
+            logMsg(`[REPLAY] Executing planned turn: '${turn}'`);
+          }
+        }
+
+        // Execute turn
+        if (turn === 'L') {
+          bot.angle -= Math.PI / 2;
+        } else if (turn === 'R') {
+          bot.angle += Math.PI / 2;
+        }
+        // 'S' continues straight
+      }
+
+      // 4. PID STEERING FOR LINE TRACKING
+      const error = 3500 - bot.linePos;
+      const dError = error - lastError;
+      lastError = error;
+
+      const correction = (KP * error + KD * dError);
+      posVal.textContent = Math.round(error);
+      pidVal.textContent = correction.toFixed(1);
+
+      const baseSpeed = (state === 'ACTUAL_RUN') ? 22 : 14; // Higher speed on race run
+      bot.angle += (correction / 3500) * 0.12;
+
+      bot.x += Math.cos(bot.angle) * baseSpeed * dt;
+      bot.y += Math.sin(bot.angle) * baseSpeed * dt;
+
+      // Update sensor visualizer
+      for (let i = 0; i < 8; i++) {
+        const pct = Math.min(100, (bot.sensorVals[i] / 1000) * 100);
+        sensorBars[i].style.height = `${Math.max(8, pct)}%`;
+        sensorBars[i].className = pct > 45 ? 'flex-1 bg-cyan-400 rounded-t' : 'flex-1 bg-slate-700 rounded-t';
+      }
+    }
+
+    // =========================================================================
+    // RENDERING
+    // =========================================================================
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Arena background
+      ctx.fillStyle = '#020617';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Grid lines (subtle)
+      ctx.strokeStyle = '#0f172a';
+      ctx.lineWidth = 1;
+      for (let g = 0; g <= 230; g += 23) {
+        ctx.beginPath();
+        ctx.moveTo(g * SCALE, 0);
+        ctx.lineTo(g * SCALE, canvas.height);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, g * SCALE);
+        ctx.lineTo(canvas.width, g * SCALE);
+        ctx.stroke();
+      }
+
+      // Draw white lines
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 3.0 * SCALE; // 30 mm width
+      ctx.lineCap = 'square';
+      ctx.lineJoin = 'miter';
+
+      for (const line of LINES) {
+        ctx.beginPath();
+        ctx.moveTo(line.x1 * SCALE, line.y1 * SCALE);
+        ctx.lineTo(line.x2 * SCALE, line.y2 * SCALE);
+        ctx.stroke();
+      }
+
+      // End Zone Box (400 mm x 400 mm)
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(END_ZONE.x * SCALE, END_ZONE.y * SCALE, END_ZONE.w * SCALE, END_ZONE.h * SCALE);
+      ctx.fillStyle = '#0f172a';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('END', (END_ZONE.x + END_ZONE.w/2) * SCALE, (END_ZONE.y + END_ZONE.h/2 + 4) * SCALE);
+
+      // Checkpoints
+      for (const cp of CHECKPOINTS) {
+        ctx.beginPath();
+        ctx.arc(cp.x * SCALE, cp.y * SCALE, 6, 0, Math.PI * 2);
+        ctx.fillStyle = cp.hit ? '#10b981' : '#f59e0b';
+        ctx.fill();
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      // Draw Start marker
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.fillText('START', START_POS.x * SCALE, (START_POS.y + 12) * SCALE);
+
+      // Draw Robot Body
+      ctx.save();
+      ctx.translate(bot.x * SCALE, bot.y * SCALE);
+      ctx.rotate(bot.angle);
+
+      // Chassis
+      ctx.fillStyle = (state === 'ACTUAL_RUN') ? '#8b5cf6' : '#2563eb';
+      ctx.fillRect(-10, -8, 20, 16);
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(-10, -8, 20, 16);
+
+      // Wheels
+      ctx.fillStyle = '#475569';
+      ctx.fillRect(-6, -11, 12, 3);
+      ctx.fillRect(-6, 8, 12, 3);
+
+      // Sensor bar (front)
+      ctx.fillStyle = '#06b6d4';
+      ctx.fillRect(9, -8, 3, 16);
+
+      // Heading arrow
+      ctx.fillStyle = '#f8fafc';
+      ctx.beginPath();
+      ctx.moveTo(8, 0);
+      ctx.lineTo(2, -4);
+      ctx.lineTo(2, 4);
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    // =========================================================================
+    // LOOP & CONTROLS
+    // =========================================================================
+    let lastTs = performance.now();
+    function loop(ts) {
+      const rawDt = Math.min(0.05, (ts - lastTs) / 1000);
+      lastTs = ts;
+
+      const subSteps = 4;
+      for (let s = 0; s < subSteps; s++) {
+        stepSimulation((rawDt * timeScale) / subSteps);
+      }
+
+      draw();
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+
+    // Speed slider
+    speedRange.addEventListener('input', (e) => {
+      timeScale = parseInt(e.target.value);
+      speedVal.textContent = timeScale + 'x';
+    });
+
+    btnDryRun.addEventListener('click', () => {
+      state = 'DRY_RUN';
+      simTime = 0.0;
+      score = 0;
+      checkpointsHit = 0;
+      CHECKPOINTS.forEach(cp => cp.hit = false);
+      recordedPath = [];
+      rawPathEl.textContent = '-';
+      optPathEl.textContent = '-';
+      nextTurnLabel.textContent = '-';
+      cpCountEl.textContent = '0 / 4';
+      cpBarEl.style.width = '0%';
+      endLed.classList.add('bg-red-950', 'shadow-none');
+      endLed.classList.remove('bg-red-500', 'shadow-[0_0_12px_#ef4444]');
+      stateLabel.textContent = 'DRY RUN (Exploration)';
+      stateLabel.className = 'text-blue-400 font-bold';
+      logMsg("Dry Run initiated. Exploring using Left-Hand-Rule...");
+    });
+
+    btnActualRun.addEventListener('click', () => {
+      if (optimizedPath.length === 0) return;
+      // Reset bot to start
+      bot.x = START_POS.x;
+      bot.y = START_POS.y;
+      bot.angle = START_POS.angle;
+      simTime = 0.0;
+      replayIndex = 0;
+      state = 'ACTUAL_RUN';
+      stateLabel.textContent = 'ACTUAL RUN (High-Speed Replay)';
+      stateLabel.className = 'text-emerald-400 font-bold';
+      nextTurnLabel.textContent = `${optimizedPath[0]} (Step 1/${optimizedPath.length})`;
+      endLed.classList.add('bg-red-950', 'shadow-none');
+      endLed.classList.remove('bg-red-500', 'shadow-[0_0_12px_#ef4444]');
+      logMsg("Actual Run initiated! Retracing optimized shortest path at high speed.");
+    });
+
+    btnReset.addEventListener('click', () => {
+      bot.x = START_POS.x;
+      bot.y = START_POS.y;
+      bot.angle = START_POS.angle;
+      bot.speed = 0;
+      state = 'IDLE';
+      simTime = 0.0;
+      timerLabel.textContent = '0.0s';
+      score = 0;
+      scoreLabel.textContent = '0 pts';
+      checkpointsHit = 0;
+      CHECKPOINTS.forEach(cp => cp.hit = false);
+      cpCountEl.textContent = '0 / 4';
+      cpBarEl.style.width = '0%';
+      recordedPath = [];
+      optimizedPath = [];
+      rawPathEl.textContent = '-';
+      optPathEl.textContent = '-';
+      nextTurnLabel.textContent = '-';
+      btnActualRun.disabled = true;
+      btnActualRun.classList.add('opacity-60', 'cursor-not-allowed');
+      endLed.classList.add('bg-red-950', 'shadow-none');
+      endLed.classList.remove('bg-red-500', 'shadow-[0_0_12px_#ef4444]');
+      stateLabel.textContent = 'IDLE';
+      stateLabel.className = 'text-blue-400';
+      logMsg("Simulator reset to starting point.");
+    });
+  </script>
+</body>
+</html>
