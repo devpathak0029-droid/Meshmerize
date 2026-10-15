@@ -16,14 +16,12 @@ public:
     MazeSolver();
 
     void reset();
-    void recordTurn(char turn);
+    bool recordTurn(char turn); // Returns false if buffer full
     
-    // Simplifies raw turns using standard turn-reduction rules
-    // (LBL->S, LBR->B, LBS->R, SBL->R, SBS->B, RBL->B)
+    // Simplifies raw turns using complete 9-rule turn-reduction algebra
     void simplifyPath();
 
-    // Loop detection & prune:
-    // If the bot revisits the same junction orientation, trims cyclical dead paths
+    // Repeated multi-pass reduction until no 'B' remains
     void optimizeAll();
 
     const char* getPath() const { return _path; }

@@ -1,5 +1,12 @@
 #include "MotionControl.h"
 
+// Compatibility layer for ESP32 Arduino Core 2.x vs Core 3.x
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+    #define USE_LEDC_V3 1
+#else
+    #define USE_LEDC_V3 0
+#endif
+
 MotionControl::MotionControl(SensorArray* sensors) : _sensors(sensors) {}
 
 void MotionControl::begin() {
@@ -9,57 +16,113 @@ void MotionControl::begin() {
     pinMode(PIN_MOTOR_BIN2, OUTPUT);
     pinMode(PIN_MOTOR_STBY, OUTPUT);
 
-    // Enable motor driver standby
+    // Initial safe state: motors standby active
     digitalWrite(PIN_MOTOR_STBY, HIGH);
 
-    // Configure ESP32 LEDC PWM timer and pins
+#if USE_LEDC_V3
+    ledcAttach(PIN_MOTOR_PWMA, PWM_FREQ, PWM_RESOLUTION);
+    ledcAttach(PIN_MOTOR_PWMB, PWM_FREQ, PWM_RESOLUTION);
+#else
     ledcSetup(PWM_CHAN_A, PWM_FREQ, PWM_RESOLUTION);
     ledcSetup(PWM_CHAN_B, PWM_FREQ, PWM_RESOLUTION);
     ledcAttachPin(PIN_MOTOR_PWMA, PWM_CHAN_A);
     ledcAttachPin(PIN_MOTOR_PWMB, PWM_CHAN_B);
+#endif
 
-    stop();
+    brake();
 }
 
 void MotionControl::stop() {
-    setMotorSpeeds(0, 0);
+    // High impedance coast
+    digitalWrite(PIN_MOTOR_AIN1, LOW);
+    digitalWrite(PIN_MOTOR_AIN2, LOW);
+    digitalWrite(PIN_MOTOR_BIN1, LOW);
+    digitalWrite(PIN_MOTOR_BIN2, LOW);
+#if USE_LEDC_V3
+    ledcWrite(PIN_MOTOR_PWMA, 0);
+    ledcWrite(PIN_MOTOR_PWMB, 0);
+#else
+    ledcWrite(PWM_CHAN_A, 0);
+    ledcWrite(PWM_CHAN_B, 0);
+#endif
+}
+
+void MotionControl::brake() {
+    // TB6612FNG Active Brake: IN1=HIGH, IN2=HIGH, PWM=255
+    digitalWrite(PIN_MOTOR_AIN1, HIGH);
+    digitalWrite(PIN_MOTOR_AIN2, HIGH);
+    digitalWrite(PIN_MOTOR_BIN1, HIGH);
+    digitalWrite(PIN_MOTOR_BIN2, HIGH);
+#if USE_LEDC_V3
+    ledcWrite(PIN_MOTOR_PWMA, 255);
+    ledcWrite(PIN_MOTOR_PWMB, 255);
+#else
+    ledcWrite(PWM_CHAN_A, 255);
+    ledcWrite(PWM_CHAN_B, 255);
+#endif
 }
 
 void MotionControl::driveLeft(int16_t speed) {
+    if (INVERT_LEFT_MOTOR) speed = -speed;
     if (speed > 255) speed = 255;
     if (speed < -255) speed = -255;
 
     if (speed > 0) {
         digitalWrite(PIN_MOTOR_AIN1, HIGH);
         digitalWrite(PIN_MOTOR_AIN2, LOW);
+#if USE_LEDC_V3
+        ledcWrite(PIN_MOTOR_PWMA, speed);
+#else
         ledcWrite(PWM_CHAN_A, speed);
+#endif
     } else if (speed < 0) {
         digitalWrite(PIN_MOTOR_AIN1, LOW);
         digitalWrite(PIN_MOTOR_AIN2, HIGH);
+#if USE_LEDC_V3
+        ledcWrite(PIN_MOTOR_PWMA, -speed);
+#else
         ledcWrite(PWM_CHAN_A, -speed);
+#endif
     } else {
-        digitalWrite(PIN_MOTOR_AIN1, LOW);
-        digitalWrite(PIN_MOTOR_AIN2, LOW);
-        ledcWrite(PWM_CHAN_A, 0);
+        digitalWrite(PIN_MOTOR_AIN1, HIGH);
+        digitalWrite(PIN_MOTOR_AIN2, HIGH); // Brake
+#if USE_LEDC_V3
+        ledcWrite(PIN_MOTOR_PWMA, 255);
+#else
+        ledcWrite(PWM_CHAN_A, 255);
+#endif
     }
 }
 
 void MotionControl::driveRight(int16_t speed) {
+    if (INVERT_RIGHT_MOTOR) speed = -speed;
     if (speed > 255) speed = 255;
     if (speed < -255) speed = -255;
 
     if (speed > 0) {
         digitalWrite(PIN_MOTOR_BIN1, HIGH);
         digitalWrite(PIN_MOTOR_BIN2, LOW);
+#if USE_LEDC_V3
+        ledcWrite(PIN_MOTOR_PWMB, speed);
+#else
         ledcWrite(PWM_CHAN_B, speed);
+#endif
     } else if (speed < 0) {
         digitalWrite(PIN_MOTOR_BIN1, LOW);
         digitalWrite(PIN_MOTOR_BIN2, HIGH);
+#if USE_LEDC_V3
+        ledcWrite(PIN_MOTOR_PWMB, -speed);
+#else
         ledcWrite(PWM_CHAN_B, -speed);
+#endif
     } else {
-        digitalWrite(PIN_MOTOR_BIN1, LOW);
-        digitalWrite(PIN_MOTOR_BIN2, LOW);
-        ledcWrite(PWM_CHAN_B, 0);
+        digitalWrite(PIN_MOTOR_BIN1, HIGH);
+        digitalWrite(PIN_MOTOR_BIN2, HIGH); // Brake
+#if USE_LEDC_V3
+        ledcWrite(PIN_MOTOR_PWMB, 255);
+#else
+        ledcWrite(PWM_CHAN_B, 255);
+#endif
     }
 }
 
@@ -79,69 +142,62 @@ void MotionControl::backward(int16_t speed) {
 void MotionControl::inchForward(uint16_t durationMs) {
     forward(INCH_SPEED);
     delay(durationMs);
-    stop();
+    brake();
+    delay(40); // brief settle
 }
 
-// Closed-loop Left 90 Turn:
-// 1. Pivot until line is cleared (debounce)
-// 2. Pivot until center sensor re-acquires the white line
 bool MotionControl::turnLeft90() {
     uint32_t start = millis();
-    
-    // Step 1: Spin off the current line
+    // Step 1: Initial pivot kick to clear current line
     setMotorSpeeds(-TURN_SPEED, TURN_SPEED);
-    delay(150); // Small initial blind kick to clear original line
+    delay(130);
 
-    // Step 2: Spin until center sensor detects new perpendicular line
+    // Step 2: Spin until center sensor locks onto new perpendicular line
     while ((millis() - start) < TURN_TIMEOUT_MS) {
         _sensors->readSensors(nullptr);
         if (_sensors->isCenterDetected()) {
-            stop();
+            brake();
+            delay(30);
             return true;
         }
-        delay(5);
+        delay(4);
     }
-    stop();
-    return false; // Timeout safety
-}
-
-// Closed-loop Right 90 Turn
-bool MotionControl::turnRight90() {
-    uint32_t start = millis();
-
-    // Step 1: Spin off the current line
-    setMotorSpeeds(TURN_SPEED, -TURN_SPEED);
-    delay(150);
-
-    // Step 2: Spin until center sensor detects new perpendicular line
-    while ((millis() - start) < TURN_TIMEOUT_MS) {
-        _sensors->readSensors(nullptr);
-        if (_sensors->isCenterDetected()) {
-            stop();
-            return true;
-        }
-        delay(5);
-    }
-    stop();
+    brake();
     return false;
 }
 
-// Closed-loop 180 Turn (U-Turn at dead end)
+bool MotionControl::turnRight90() {
+    uint32_t start = millis();
+    setMotorSpeeds(TURN_SPEED, -TURN_SPEED);
+    delay(130);
+
+    while ((millis() - start) < TURN_TIMEOUT_MS) {
+        _sensors->readSensors(nullptr);
+        if (_sensors->isCenterDetected()) {
+            brake();
+            delay(30);
+            return true;
+        }
+        delay(4);
+    }
+    brake();
+    return false;
+}
+
 bool MotionControl::turnAround180() {
     uint32_t start = millis();
-
-    // Pivot around until line re-acquired
     setMotorSpeeds(-TURN_SPEED, TURN_SPEED);
-    delay(300); // Larger kick to clear reverse dead end
+    delay(260); // kick to clear dead end
 
     while ((millis() - start) < (TURN_TIMEOUT_MS * 1.5)) {
         _sensors->readSensors(nullptr);
         if (_sensors->isCenterDetected()) {
-            stop();
+            brake();
+            delay(30);
             return true;
         }
-        delay(5);
+        delay(4);
     }
-    stop();
+    brake();
     return false;
 }

@@ -1,0 +1,21 @@
+# Priority Defect & Bug Register: Meshmerize Autonomous Bot
+
+This register documents all defects identified during Phase One repository audit across firmware, algorithm, pin configuration, and hardware abstraction.
+
+---
+
+### Defect Table
+
+| ID | File | Severity | Defect Description | Proposed Fix & Mitigation | Status |
+|:---|:---|:---:|:---|:---|:---:|
+| **DEF-01** | `include/Config.h` | **CRITICAL** | GPIO 25 and 26 misclassified as ADC1 pins (`ADC1 pins recommended for ESP32 with WiFi`). Classic ESP32 ADC1 is strictly GPIO 32-39. GPIO 25/26 are ADC2 (`ADC2_CH8`, `ADC2_CH9`). | Reassign sensor pins to valid ADC pins, document ADC2 limitations with Wi-Fi/BT, and add compile-time checks and configurable pins. | **PENDING** |
+| **DEF-02** | `src/MotionControl.cpp`, `include/Config.h` | **CRITICAL** | Incompatible LEDC API for ESP32 Core v3.0+ (`ledcSetup`, `ledcAttachPin`, `ledcWrite(channel, ...)`). In Core v3+, LEDC attaches directly to pins via `ledcAttach(pin, freq, res)` and `ledcWrite(pin, duty)`. | Add dual-core compatibility macros (`#if ESP_ARDUINO_VERSION >= ...`) supporting both legacy v2.x and modern v3.x LEDC APIs. | **PENDING** |
+| **DEF-03** | `src/MazeSolver.cpp`, `test/maze_sim.py` | **CRITICAL** | Incomplete turn reduction rules. Missing canonical rules: `SBR -> L` and `RBS -> L`. If `SBR` or `RBS` occurs at a T-junction or detour, dead end `'B'` persists in the path array, causing wrong turns during Actual Run. | Add `SBR -> L` and `RBS -> L` to C++ `MazeSolver` and Python simulator test suite. | **PENDING** |
+| **DEF-04** | `src/main.cpp` | **HIGH** | Junction thrashing & infinite duplicate turn logging. After detecting a junction and inching, the bot is still physically positioned over the 30mm transverse stripe on subsequent loop iterations, causing multi-logging. | Implement stateful junction clearance: require line traversal past junction or line-reacquisition debounce before logging the next junction. | **PENDING** |
+| **DEF-05** | `src/main.cpp` | **HIGH** | Straight junction motor stoppage. When choosing straight (`'S'`) at a junction, `inchForward()` stops the motors, and the `'S'` branch exits without re-engaging forward speed, causing motor stall. | Resume driving forward smoothly across the intersection after registering `'S'`. | **PENDING** |
+| **DEF-06** | `src/PIDController.cpp` | **HIGH** | Derivative explosion on reset / start. `_lastError` is initialized to 0. When initialized off-center, `(error - 0)/dt` yields astronomical derivative kicks, saturating motors violently. | Add `_isFirstRun` flag to initialize `_lastError = error` on initial call or `reset()`, plus output clamping limits. | **PENDING** |
+| **DEF-07** | `src/main.cpp` | **HIGH** | Exploding PID `dt` and integral term after blocking turns. `turnLeft90()` blocks for up to 1200ms without updating `lastLoopTime`. Next loop computes `dt = 1.2s`, driving integral to limits. | Clamp `dt` to safe upper bound (e.g. `dt <= 0.05s`) and re-synchronize `lastLoopTime = micros()` immediately exiting turns. | **PENDING** |
+| **DEF-08** | `src/SensorArray.cpp` | **MEDIUM** | Inverted sensor polarity assumption & uncalibrated lockup. Some IR arrays output LOW on white and HIGH on black (e.g. QTR-8A analog pull-down). If uncalibrated, span defaults to 1, locking normalized values to 0. | Add configurable `INVERT_SENSOR_LOGIC` setting, safe default calibration span fallback, and sensor diagnostic dump. | **PENDING** |
+| **DEF-09** | `src/MotionControl.cpp` | **MEDIUM** | Coasting vs active braking on TB6612FNG. Setting `AIN1=LOW, AIN2=LOW` coasts the wheels, leading to inertial overshoot past 90° turns. | Implement active braking (`AIN1=HIGH, AIN2=HIGH` with PWM) to snap wheels to a stop instantly at intersections. | **PENDING** |
+| **DEF-10** | `src/main.cpp` | **MEDIUM** | Accidental auto-start on boot / restart. If mode switch is LOW at boot, Dry Run begins after 1s delay without waiting for operator confirmation. | Implement explicit arming state machine with button press confirmation before starting either run. | **PENDING** |
+| **DEF-11** | Root directory | **MEDIUM** | Missing `platformio.ini`, `.gitignore`, and CI workflow (`.github/workflows/build_and_test.yml`). | Add PlatformIO build configuration for ESP32, comprehensive `.gitignore`, and GitHub Actions workflow. | **PENDING** |

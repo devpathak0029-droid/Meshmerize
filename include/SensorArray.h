@@ -14,7 +14,7 @@ enum JunctionType {
     JUNCTION_T_SPLIT,         // T-intersection: Left and Right branches, no straight
     JUNCTION_CROSS_4WAY,      // 4-way cross: Left, Straight, Right
     JUNCTION_DEAD_END,        // No line detected under any sensor
-    JUNCTION_END_ZONE         // 400mm x 400mm solid white box
+    JUNCTION_END_ZONE         // 400mm x 400mm solid white box candidate
 };
 
 class SensorArray {
@@ -22,31 +22,31 @@ public:
     SensorArray();
 
     void begin();
-    void calibrateMinMax(); // Call repeatedly during manual or auto-spin calibration
+    void calibrateMinMax(); // Sweep calibration
     void resetCalibration();
 
     // Read normalized sensor values (0 = pure black surface, 1000 = pure white line)
     void readSensors(uint16_t* outValues);
 
     // Calculate line center position (0 to 7000, 3500 is centered)
-    // Returns true if line is present, false if line lost
     bool readLinePosition(float& position);
 
-    // Raw junction detection based on sensor bitmasks
-    JunctionType detectJunctionImmediate();
+    // Query methods (const qualified)
+    bool isAllWhite() const;
+    bool isAllBlack() const;
+    bool isLeftDetected() const;
+    bool isRightDetected() const;
+    bool isCenterDetected() const;
 
-    // Verification helpers
-    bool isAllWhite();
-    bool isAllBlack();
-    bool isLeftDetected();
-    bool isRightDetected();
-    bool isCenterDetected();
+    // Diagnostic print
+    void printDiagnostics() const;
 
 private:
     uint16_t _calibMin[NUM_SENSORS];
     uint16_t _calibMax[NUM_SENSORS];
     uint16_t _lastValues[NUM_SENSORS];
-    float _lastPosition;
+    float    _lastPosition;
+    bool     _isCalibrated;
 };
 
 #endif // SENSORARRAY_H
